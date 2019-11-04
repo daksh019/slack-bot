@@ -1,6 +1,14 @@
+const lodash = require('lodash');
 const { WebClient } = require('@slack/web-api');
-// const token = process.env.SLACK_TOKEN;
-const token = "xoxp-810010652129-817458723940-817931367952-4b90d3dd9a8ab0de130d442f32e0fbf9";
+const papaparse = require('papaparse');
+
+const express = require('express');
+const server = express();
+
+
+const token = "";
+const idToken = "";
+
 const webBot = new WebClient(token);
 
 let channelInfo = [];
@@ -24,40 +32,83 @@ async function getAllChannels(nextCursor) {
 }
 
 async function getAllMembers(){
-    channelInfo.forEach(channel => {
+    let pmArrays = [];
+    channelInfo.forEach((channel, index) => {
         channel.members = [];
         if(channel.num_members > 0){
-            const { members } = await webBot.conversations.members({
+            let pm = webBot.conversations.members({
                 channel: channel.id
             });
-            console.log("logging all members");
-            console.log(members.length);
-            if(members.length > 0){
-                console.log("setting all the members");
-                channel.members = members;
-                members.forEach(id => memberIds.add(id));
-            } 
+            pmArrays.push(pm);
+        } else {
+            pmArrays.push(pm);
         }
     });
-    console.log(memberIds);    
+
+    const memberResults = await Promise.all(pmArrays);
+    
+    memberResults.forEach((result, index) => {
+        const { members } = result;
+        if(members && members.length > 0){
+            console.log("setting all the members");
+            const channel = channelInfo[index];
+            channel.members = members;
+            members.forEach(id => memberIds.add(id));
+        }
+    });
 }
 
 async function getMemberDetails(){
-    memberIds.forEach(async id => {
-        let member = await webBot.users.identity({
-            id: members[0]
-        });
-        memIdDetails[id] = member;
+    
+    const memberBot = new WebClient(idToken);
+
+    let pmArray = [];
+    memberIds.forEach(id => {
+        pmArray.push(memberBot.users.identity({
+            id
+        }));
     });
+
+    let results = await Promise.all(pmArray);
+    console.log(results);
+
+    results.forEach(result => {
+        if(result.user){
+            const id = result.user.id;
+            memIdDetails[id] = result.user;
+        }
+    });
+
+    channelInfo.forEach(channel => {
+        channel.memberDetails = [];
+        channel.memberEmails = [];
+        channel.members.forEach(id => {
+            let details = memIdDetails[id];
+            if(details){
+                channel.memberEmails.push(details.email);
+            }
+        });
+    })
 }
 
-async function execute() {
+function prepareData(){
+    let datapoints = ['id', 'memberEmails', 'name', 'num_members'];
+    const data = channelInfo.map(info => lodash.pick(info, datapoints));
+    const csvdata = papaparse.unparse(data);
+    console.log(csvdata);
+    return csvdata;
+}
+
+
+server.get('/data', async (req, res) => {
     await getAllChannels();
     await getAllMembers();
     await getMemberDetails();
-    
-    console.log(channelInfo);
-    console.log(memIdDetails);
-}
 
-execute();
+    const data = prepareData();
+    res.set('Content-Type', 'text/plain');
+    res.end(data);
+});
+server.listen(3000);
+
+console.log("get data on localhost://3000/data");
